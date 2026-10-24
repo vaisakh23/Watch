@@ -1,0 +1,24 @@
+[project]
+name = "tg-ui"
+version = "0.1.0"
+description = "Telegram library and streaming UI"
+requires-python = ">=3.9"
+readme = "README.md"
+dependencies = [
+    "flask>=3.1,<4",
+    "python-dotenv>=1.0,<2",
+    "telethon==1.45.0",
+]
+
+[project.scripts]
+tg-ui = "tg_ui.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-data]
+tg_ui = ["templates/*.html", "static/*"]
+
+[tool.uv]
+package = true
