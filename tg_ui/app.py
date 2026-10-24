@@ -5,12 +5,13 @@ Open http://localhost:5000 in your phone browser.
 Tested against: Telethon 1.45.0, Flask 3.1.x
 
 API keys are read from (first found):
-  1. environment variables TG_API_ID / TG_API_HASH
+  1. environment variables TELEGRAM_API_ID / TELEGRAM_API_HASH
   2. the project .env file
 
 Library data is cached in ~/tg_library.db, thumbnails in ~/.tg_thumbs.
 After the first scan, only NEW messages are fetched on each sync.
 """
+
 import asyncio
 from difflib import SequenceMatcher
 import mimetypes
@@ -24,10 +25,20 @@ import json
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file
+from flask import (
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_file,
+)
 from dotenv import load_dotenv
-from telethon import TelegramClient, functions
+from telethon import TelegramClient, functions, utils
 from telethon.errors import SessionPasswordNeededError
+from telethon.tl import types
 
 
 # ----------------------------- config -----------------------------
@@ -36,25 +47,24 @@ load_dotenv()
 
 
 def load_keys():
-    i, h = os.environ.get("TG_API_ID"), os.environ.get("TG_API_HASH")
+    i, h = os.environ.get("TELEGRAM_API_ID"), os.environ.get("TELEGRAM_API_HASH")
     return int(i or 0), (h or "")
 
 
 API_ID, API_HASH = load_keys()
 PORT = 5000
-HOST = os.environ.get("TG_UI_HOST", "0.0.0.0")
-DOWNLOAD_DIR = os.path.expanduser("~/storage/downloads/Telegram")
-SESSION = os.path.expanduser("~/tg_ui_session")     # keep this file private!
+HOST = os.environ.get("TG_UI_HOST", "127.0.0.1")
+TG_GROUP = os.environ.get("TG_GROUP", "").strip()
+SESSION = os.path.expanduser("~/tg_ui_session")  # keep this file private!
 DB_PATH = os.path.expanduser("~/tg_library.db")
 THUMB_DIR = os.path.expanduser("~/.tg_thumbs")
 TMDB_TOKEN = os.environ.get("TMDB_ACCESS_TOKEN", "").strip()
 TMDB_API_KEY = os.environ.get("TMDB_API_KEY", "").strip()
 TMDB_LANGUAGE = os.environ.get("TMDB_LANGUAGE", "en-US").strip()
-CHUNK = 512 * 1024      # multiple of 4096 that divides 1 MB evenly
-PREFETCH = 8            # chunks fetched ahead while streaming
-SYNC_EVERY = 60         # seconds; opening the library re-syncs if older than this
+CHUNK = 512 * 1024  # multiple of 4096 that divides 1 MB evenly
+PREFETCH = 8  # chunks fetched ahead while streaming
+SYNC_EVERY = 60  # seconds; opening the library re-syncs if older than this
 
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 os.makedirs(THUMB_DIR, exist_ok=True)
 
 # ---------------- Telethon runs in its own event-loop thread ----------------
@@ -67,12 +77,35 @@ def run(coro):
 
 
 client = None
+_configured_chat_id = None
 
 
 async def _init():
     global client
     client = TelegramClient(SESSION, API_ID, API_HASH)
     await client.connect()
+
+
+async def _resolve_configured_group():
+    peer = await _peer(TG_GROUP)
+    entity = await client.get_entity(peer)
+    if isinstance(entity, types.User) or getattr(entity, "broadcast", False):
+        raise ValueError(
+            "TG_GROUP must identify a Telegram group or supergroup, not a user or broadcast channel."
+        )
+    return str(utils.get_peer_id(entity))
+
+
+def configured_chat():
+    """Return the configured group's canonical Telegram ID, resolving it once per process."""
+    global _configured_chat_id
+    if not TG_GROUP:
+        raise RuntimeError(
+            "TG_GROUP is required. Set it to the group's @username or numeric ID."
+        )
+    if _configured_chat_id is None:
+        _configured_chat_id = run(_resolve_configured_group())
+    return _configured_chat_id
 
 
 # ----------------------------- database -----------------------------
@@ -108,29 +141,57 @@ def save_items(rows):
     if not rows:
         return
     with dblock:
-        db.executemany("INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows)
+        db.executemany(
+            "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?)", rows
+        )
         db.commit()
 
 
 # ------------------------ filename parsing ------------------------
 
-VIDEO_EXT = (".mkv", ".mp4", ".avi", ".mov", ".webm", ".m4v", ".ts", ".flv", ".wmv", ".mpg",
-             ".mpeg", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav")
+VIDEO_EXT = (
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".webm",
+    ".m4v",
+    ".ts",
+    ".flv",
+    ".wmv",
+    ".mpg",
+    ".mpeg",
+    ".mp3",
+    ".m4a",
+    ".flac",
+    ".ogg",
+    ".opus",
+    ".wav",
+)
 
 QUALITY = re.compile(
     r"(?i)\b(480p|576p|720p|1080p|1440p|2160p|4k|uhd|blu[ -]?ray|brrip|bdrip|web[ -]?dl|web[ -]?rip|"
     r"hdrip|hdtv|dvdrip|hdcam|x26[45]|h[ .]?26[45]|hevc|10[ -]?bit|remux|proper|repack|"
-    r"extended|unrated|pahe|yify|yts|rarbg)\b")
+    r"extended|unrated|pahe|yify|yts|rarbg)\b"
+)
 
 
 def clean(s):
-    s = re.sub(r"(?i)\.(mkv|mp4|avi|mov|webm|m4v|ts|flv|wmv|mpg|mpeg|mp3|m4a|flac|ogg|opus|wav)$", "", s.strip())
+    s = re.sub(
+        r"(?i)\.(mkv|mp4|avi|mov|webm|m4v|ts|flv|wmv|mpg|mpeg|mp3|m4a|flac|ogg|opus|wav)$",
+        "",
+        s.strip(),
+    )
     for _ in range(3):  # leading [Group] or (tag)
         s2 = re.sub(r"^\s*(\[[^\]]*\]|\([^)]*\))\s*", "", s)
         if s2 == s:
             break
         s = s2
-    s = re.sub(r"(?i)^(www\.)?[\w-]+\.(com|net|org|in|to|io|cc|xyz|me|tv)\s*[-\u2013_ ]+", "", s)
+    s = re.sub(
+        r"(?i)^(www\.)?[\w-]+\.(com|net|org|in|to|io|cc|xyz|me|tv)\s*[-\u2013_ ]+",
+        "",
+        s,
+    )
     s = re.sub(r"[._]+", " ", s)
     return re.sub(r"\s+", " ", s).strip(" -")
 
@@ -147,23 +208,46 @@ def parse_one(raw):
     """Return (info, matched). info = title/season/episode/year."""
     s = clean(raw)
     # TV: S01E10 or 1x10
-    m = re.search(r"(?i)^(.*?)[\s(\[]*\b(?:s(\d{1,2})\s?e(\d{1,3})|(\d{1,2})x(\d{2,3}))\b", s)
+    m = re.search(
+        r"(?i)^(.*?)[\s(\[]*\b(?:s(\d{1,2})\s?e(\d{1,3})|(\d{1,2})x(\d{2,3}))\b", s
+    )
     if m:
         season = int(m.group(2) or m.group(4))
         ep = int(m.group(3) or m.group(5))
-        return {"title": finish_title(m.group(1)), "season": season, "episode": ep, "year": None}, True
+        return {
+            "title": finish_title(m.group(1)),
+            "season": season,
+            "episode": ep,
+            "year": None,
+        }, True
     # Anime style: "Show Name - 05"
     m = re.search(r"^(.+?)\s+-\s+(\d{1,3})(?:v\d)?(?=\s|$|\[|\()", s)
     if m and not re.search(r"(?:19|20)\d{2}$", m.group(1).strip()):
-        return {"title": finish_title(m.group(1)), "season": 1, "episode": int(m.group(2)), "year": None}, True
+        return {
+            "title": finish_title(m.group(1)),
+            "season": 1,
+            "episode": int(m.group(2)),
+            "year": None,
+        }, True
     # Movie: title + year
     mq = QUALITY.search(s)
-    cut = (s[:mq.start()] if mq else s).strip()
-    m = (re.search(r"^(.+?)[\s(\[]+((?:19|20)\d{2})[\s)\]]*$", cut)
-         or re.search(r"^(.+?)[\s(\[]+((?:19|20)\d{2})\b", cut))
+    cut = (s[: mq.start()] if mq else s).strip()
+    m = re.search(r"^(.+?)[\s(\[]+((?:19|20)\d{2})[\s)\]]*$", cut) or re.search(
+        r"^(.+?)[\s(\[]+((?:19|20)\d{2})\b", cut
+    )
     if m:
-        return {"title": finish_title(m.group(1)), "season": None, "episode": None, "year": int(m.group(2))}, True
-    return {"title": finish_title(cut), "season": None, "episode": None, "year": None}, False
+        return {
+            "title": finish_title(m.group(1)),
+            "season": None,
+            "episode": None,
+            "year": int(m.group(2)),
+        }, True
+    return {
+        "title": finish_title(cut),
+        "season": None,
+        "episode": None,
+        "year": None,
+    }, False
 
 
 def parse(name, caption=""):
@@ -193,12 +277,13 @@ def apply_alias(alias, key, title):
 
 # ----------------------- peers / messages / sync -----------------------
 
+
 async def _peer(chat):
     x = int(chat) if re.fullmatch(r"-?\d+", chat) else chat
     try:
         await client.get_input_entity(x)
     except ValueError:
-        async for _ in client.iter_dialogs():   # refresh entity cache once
+        async for _ in client.iter_dialogs():  # refresh entity cache once
             pass
         await client.get_input_entity(x)
     return x
@@ -218,7 +303,7 @@ def topic_of(m):
     return 1
 
 
-sync_state = {}   # chat -> dict(running, scanned, found, error, done_at)
+sync_state = {}  # chat -> dict(running, scanned, found, error, done_at)
 
 
 def start_sync(chat, full=False):
@@ -247,9 +332,12 @@ async def _sync(chat, full=False):
         peer = await _peer(chat)
         ent = await client.get_entity(peer)
 
-        try:   # forum topics (names of your Movies / Tv shows / Anime sections)
-            res = await client(functions.messages.GetForumTopicsRequest(
-                peer=ent, offset_date=0, offset_id=0, offset_topic=0, limit=100))
+        try:  # forum topics (names of your Movies / Tv shows / Anime sections)
+            res = await client(
+                functions.messages.GetForumTopicsRequest(
+                    peer=ent, offset_date=0, offset_id=0, offset_topic=0, limit=100
+                )
+            )
             rows = [(chat, t.id, t.title) for t in res.topics if hasattr(t, "title")]
             with dblock:
                 db.executemany("INSERT OR REPLACE INTO topics VALUES (?,?,?)", rows)
@@ -263,11 +351,15 @@ async def _sync(chat, full=False):
 
         r = dbx("SELECT last_id FROM meta WHERE chat=?", (chat,))
         last = r[0]["last_id"] if r else 0
-        alias = {a["old_key"]: (a["new_key"], a["new_title"])
-                 for a in dbx("SELECT * FROM alias WHERE chat=?", (chat,))}
+        alias = {
+            a["old_key"]: (a["new_key"], a["new_title"])
+            for a in dbx("SELECT * FROM alias WHERE chat=?", (chat,))
+        }
 
         newmax, batch = last, []
-        async for m in client.iter_messages(ent, min_id=last):   # only messages newer than last sync
+        async for m in client.iter_messages(
+            ent, min_id=last
+        ):  # only messages newer than last sync
             st["scanned"] += 1
             newmax = max(newmax, m.id)
             f = m.file
@@ -278,14 +370,30 @@ async def _sync(chat, full=False):
                 name += f.ext or ""
             info = parse(name, m.text or "")
             key, title = apply_alias(alias, make_key(info), info["title"])
-            batch.append((chat, m.id, topic_of(m), name, f.size or 0, int(m.date.timestamp()),
-                          title, key, info["season"], info["episode"], info["year"]))
+            batch.append(
+                (
+                    chat,
+                    m.id,
+                    topic_of(m),
+                    name,
+                    f.size or 0,
+                    int(m.date.timestamp()),
+                    title,
+                    key,
+                    info["season"],
+                    info["episode"],
+                    info["year"],
+                )
+            )
             st["found"] += 1
             if len(batch) >= 200:
                 save_items(batch)
                 batch = []
         save_items(batch)
-        dbx("INSERT OR REPLACE INTO meta VALUES (?,?,?)", (chat, newmax, int(time.time())))
+        dbx(
+            "INSERT OR REPLACE INTO meta VALUES (?,?,?)",
+            (chat, newmax, int(time.time())),
+        )
     except Exception as e:  # noqa: BLE001
         st["error"] = str(e)
     finally:
@@ -293,47 +401,7 @@ async def _sync(chat, full=False):
         st["done_at"] = time.time()
 
 
-async def _messages(chat, limit):
-    peer = await _peer(chat)
-    out = []
-    async for m in client.iter_messages(peer, limit=limit):
-        btns = []
-        if m.buttons:
-            for i, row in enumerate(m.buttons):
-                for j, b in enumerate(row):
-                    btns.append({"i": i, "j": j, "text": b.text, "url": b.url})
-        f = m.file
-        item = {"id": m.id, "text": (m.text or "")[:400], "mine": m.out, "btns": btns,
-                "fname": None, "size": 0, "surl": None}
-        if f:
-            fname = f.name or f"file_{m.id}{f.ext or ''}"
-            item.update(fname=fname, size=f.size or 0)
-            if is_media(f):
-                item["surl"] = f"/stream/{m.id}/{quote(fname)}?chat={quote(chat)}"
-        out.append(item)
-    return out
-
-
-async def _send(chat, text):
-    await client.send_message(await _peer(chat), text)
-
-
-async def _click(chat, mid, i, j):
-    m = await _get_msg(chat, mid, fresh=True)
-    await m.click(i, j)
-
-
-async def _dialogs():
-    out = []
-    async for d in client.iter_dialogs(limit=300):
-        e = d.entity
-        out.append({"id": d.id, "name": d.name or str(d.id),
-                    "forum": bool(getattr(e, "forum", False)), "bot": bool(getattr(e, "bot", False))})
-    out.sort(key=lambda c: (not c["forum"], c["name"].lower()))
-    return out
-
-
-msg_cache = {}   # (chat, mid) -> message (so seeking doesn't refetch every time)
+msg_cache = {}  # (chat, mid) -> message (so seeking doesn't refetch every time)
 
 
 async def _get_msg(chat, mid, fresh=False):
@@ -353,25 +421,6 @@ async def _thumb(chat, mid):
     if not m:
         return None
     return await client.download_media(m, file=bytes, thumb=-1)
-
-
-jobs = {}   # key -> dict(name, done, total, status, path, error)
-
-
-async def _download(chat, mid, key):
-    job = jobs[key]
-    try:
-        m = await _get_msg(chat, mid, fresh=True)
-        if not m:
-            raise RuntimeError("message no longer exists")
-
-        def cb(cur, total):
-            job["done"], job["total"] = cur, total
-
-        path = await m.download_media(file=DOWNLOAD_DIR + "/", progress_callback=cb)
-        job.update(status="done", path=str(path))
-    except Exception as e:  # noqa: BLE001
-        job.update(status="error", error=str(e))
 
 
 async def _next(it):
@@ -397,7 +446,6 @@ app.add_template_filter(human, "human")
 def page(**kw):
     kw.setdefault("err", request.args.get("err"))
     kw.setdefault("chat", "")
-    kw.setdefault("dl_dir", DOWNLOAD_DIR)
     kw.setdefault("port", PORT)
     return render_template("page.html", **kw)
 
@@ -414,32 +462,12 @@ def err_redirect(path, e):
     return redirect(f"{path}{sep}err={quote(str(e))}")
 
 
-# ----- chat browser (bots, channels, any chat) -----
-
 @app.route("/")
 def index():
     if not authed():
         return page(view="login", stage=state["stage"] if state["stage"] != "main" else "phone")
     state["stage"] = "main"
-    chat = request.args.get("chat", "").strip()
-    msgs, err = [], request.args.get("err")
-    if chat:
-        try:
-            msgs = run(_messages(chat, 25))
-        except Exception as e:  # noqa: BLE001
-            err = str(e)
-    return page(view="browser", chat=chat, msgs=msgs, err=err)
-
-
-@app.route("/chats")
-def chats():
-    if not authed():
-        return redirect("/")
-    try:
-        lst = run(_dialogs())
-    except Exception as e:  # noqa: BLE001
-        return page(view="chats", chats=[], err=str(e))
-    return page(view="chats", chats=lst)
+    return redirect("/lib")
 
 
 # ----- login -----
@@ -477,48 +505,17 @@ def password():
     return redirect("/")
 
 
-# ----- bot interaction -----
-
-@app.route("/send", methods=["POST"])
-def send():
-    chat = request.form["chat"]
-    try:
-        run(_send(chat, request.form["text"]))
-    except Exception as e:  # noqa: BLE001
-        return err_redirect(f"/?chat={quote(chat)}", e)
-    return redirect(f"/?chat={quote(chat)}")
-
-
-@app.route("/click", methods=["POST"])
-def click():
-    chat = request.form["chat"]
-    try:
-        run(_click(chat, int(request.form["mid"]), int(request.form["i"]), int(request.form["j"])))
-    except Exception as e:  # noqa: BLE001
-        return err_redirect(f"/?chat={quote(chat)}", e)
-    return redirect(f"/?chat={quote(chat)}")
-
-
-@app.route("/dl", methods=["POST"])
-def dl():
-    chat, mid = request.form["chat"], int(request.form["mid"])
-    key = f"{chat}:{mid}"
-    if jobs.get(key, {}).get("status") != "running":
-        jobs[key] = {"name": request.form["name"], "done": 0, "total": 0, "status": "running"}
-        asyncio.run_coroutine_threadsafe(_download(chat, mid, key), loop)
-    return redirect(request.referrer or f"/?chat={quote(chat)}")
-
-
-@app.route("/jobs")
-def jobs_json():
-    return jsonify(jobs)
-
-
 # ----- library -----
 
 def default_chat():
-    r = dbx("SELECT chat FROM meta ORDER BY synced_at DESC LIMIT 1")
-    return r[0]["chat"] if r else ""
+    return configured_chat()
+
+
+def required_chat():
+    try:
+        return configured_chat()
+    except Exception as e:  # noqa: BLE001 - turn invalid group settings into a route-level failure
+        abort(503, description=f"Configured Telegram group could not be resolved: {e}")
 
 
 def topic_list(chat):
@@ -651,9 +648,12 @@ def group_rows(chat, where="", args=(), limit=None):
 def lib():
     if not authed():
         return redirect("/")
-    chat = request.args.get("chat", "").strip() or default_chat()
-    if not chat:
-        return redirect("/chats")
+    try:
+        chat = default_chat()
+    except Exception as e:  # noqa: BLE001 - login is required before resolving Telegram usernames
+        return page(
+            view="group_error", err=f"Could not resolve TG_GROUP {TG_GROUP!r}: {e}"
+        )
     q, t = request.args.get("q", "").strip(), request.args.get("t", "")
     maybe_sync(chat)
     enrich_tmdb(chat)
@@ -676,7 +676,9 @@ def lib():
 
 @app.route("/lib/status")
 def lib_status():
-    chat = request.args.get("chat", "")
+    if not authed():
+        abort(403)
+    chat = required_chat()
     st = sync_state.get(chat, {})
     r = dbx("SELECT synced_at FROM meta WHERE chat=?", (chat,))
     metadata = tmdb_state.get(chat, {})
@@ -688,19 +690,21 @@ def lib_status():
 
 @app.route("/lib/sync", methods=["POST"])
 def lib_sync():
-    chat = request.form["chat"]
+    if not authed():
+        abort(403)
+    chat = required_chat()
     start_sync(chat, full=request.form.get("full") == "1")
-    return redirect(f"/lib?chat={quote(chat)}")
+    return redirect("/lib")
 
 
 @app.route("/lib/show")
 def lib_show():
     if not authed():
         return redirect("/")
-    chat, key = request.args.get("chat", ""), request.args.get("key", "")
+    chat, key = required_chat(), request.args.get("key", "")
     rows = dbx("SELECT * FROM items WHERE chat=? AND key=? ORDER BY season, episode, date", (chat, key))
     if not rows:
-        return redirect(f"/lib?chat={quote(chat)}")
+        return redirect("/lib")
     seasons, order = {}, []
     for r in rows:
         sk = r["season"]
@@ -708,8 +712,15 @@ def lib_show():
             seasons[sk] = []
             order.append(sk)
         tag = f'S{r["season"]:02d}E{r["episode"]:02d}' if r["season"] is not None and r["episode"] is not None else ""
-        seasons[sk].append({"mid": r["mid"], "fname": r["fname"], "size": r["size"], "tag": tag,
-                            "surl": f"/stream/{r['mid']}/{quote(r['fname'])}?chat={quote(chat)}"})
+        seasons[sk].append(
+            {
+                "mid": r["mid"],
+                "fname": r["fname"],
+                "size": r["size"],
+                "tag": tag,
+                "surl": f"/stream/{r['mid']}/{quote(r['fname'])}",
+            }
+        )
     secs = [{"label": f"Season {sk}" if sk is not None else "Files", "files": seasons[sk]} for sk in order]
     tmdb = metadata_for(chat, [key]).get(key)
     if tmdb:
@@ -720,7 +731,9 @@ def lib_show():
 
 @app.route("/lib/rename", methods=["POST"])
 def lib_rename():
-    chat, key = request.form["chat"], request.form["key"]
+    if not authed():
+        abort(403)
+    chat, key = required_chat(), request.form["key"]
     name = request.form["name"].strip()
     newkey = re.sub(r"[^a-z0-9]+", "", name.lower())
     if name and newkey:
@@ -730,12 +743,14 @@ def lib_rename():
             db.execute("INSERT OR REPLACE INTO alias VALUES (?,?,?,?)", (chat, key, newkey, name))
             db.commit()
         key = newkey
-    return redirect(f"/lib/show?chat={quote(chat)}&key={key}")
+    return redirect(f"/lib/show?key={quote(key)}")
 
 
 @app.route("/thumb")
 def thumb():
-    chat, mid = request.args.get("chat", ""), int(request.args.get("mid", "0"))
+    if not authed():
+        abort(403)
+    chat, mid = required_chat(), int(request.args.get("mid", "0"))
     safe = re.sub(r"[^0-9A-Za-z_-]", "_", chat)
     path = os.path.join(THUMB_DIR, f"{safe}_{mid}.jpg")
     if os.path.exists(path + ".none"):
@@ -777,9 +792,9 @@ def parse_range(header, size):
 
 @app.route("/stream/<int:mid>/<path:fname>")
 def stream(mid, fname):
-    chat = request.args.get("chat", "")
-    if not chat or not authed():
+    if not authed():
         abort(403)
+    chat = required_chat()
     try:
         msg = run(_get_msg(chat, mid))
     except Exception:  # noqa: BLE001
@@ -872,7 +887,13 @@ def stream(mid, fname):
 
 def main():
     if not API_ID or not API_HASH:
-        raise SystemExit("API keys not found. Set TG_API_ID and TG_API_HASH in .env.")
+        raise SystemExit(
+            "API keys not found. Set TELEGRAM_API_ID and TELEGRAM_API_HASH in .env."
+        )
+    if not TG_GROUP:
+        raise SystemExit(
+            "Telegram group not configured. Set TG_GROUP to the group's @username or numeric ID in .env."
+        )
     run(_init())
     app.run(host=HOST, port=PORT, threaded=True)
 

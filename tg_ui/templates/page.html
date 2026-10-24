@@ -1,227 +1,39 @@
-
 <!doctype html>
-<html><head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TG Library</title>
-<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"></head><body>
-
-{% macro actions(chat, mid, fname, surl, port) %}
-<div class="acts">
- <form method="post" action="/dl" class="full" style="margin:0">
-  <input type="hidden" name="chat" value="{{chat}}">
-  <input type="hidden" name="mid" value="{{mid}}">
-  <input type="hidden" name="name" value="{{fname}}">
-  <button class="dl">&#11015; Download</button>
- </form>
- {% if surl %}
-  <a class="full" href="{{surl}}" target="_blank"><button type="button" class="st">&#9654; Stream in Chrome</button></a>
-  <a href="intent://localhost:{{port}}{{surl}}#Intent;scheme=http;type=video/*;package=org.videolan.vlc;end"><button type="button">VLC</button></a>
-  <a href="intent://localhost:{{port}}{{surl}}#Intent;scheme=http;type=video/*;package=com.mxtech.videoplayer.ad;end"><button type="button">MX Player</button></a>
-  <button type="button" class="full" onclick="copyLink('http://localhost:{{port}}{{surl}}')">Copy stream link</button>
- {% endif %}
-</div>
-{% endmacro %}
-
-{% macro cards(chat, groups) %}
- {% for g in groups %}
- <a class="card" href="/lib/show?chat={{chat|urlencode}}&key={{g.key}}">
-  <div class="poster"><span>{{g.title[:1]}}</span>
-   <img loading="lazy" src="{{g.poster_url or ('/thumb?chat=' ~ (chat|urlencode) ~ '&mid=' ~ g.thumb_mid)}}" onerror="this.remove()"></div>
-  <div class="ct">{{g.title}}</div><div class="cs">{{g.sub}}</div>
- </a>
- {% endfor %}
-{% endmacro %}
-
+<html lang="en"><head>
+ <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>Screenroom</title>
+ <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head><body>
 {% if err %}<p class="err">{{err}}</p>{% endif %}
 
 {% if view == 'login' %}
- <h3>Telegram login</h3>
- {% if stage == 'phone' %}
-  <form method="post" action="/login">
-   <p>Phone number with country code (e.g. +91XXXXXXXXXX)</p>
-   <input name="phone" placeholder="+91..." required><button>Send code</button>
-  </form>
- {% elif stage == 'code' %}
-  <form method="post" action="/code">
-   <p>Enter the code Telegram sent to your Telegram app / SMS</p>
-   <input name="code" inputmode="numeric" required><button>Login</button>
-  </form>
- {% else %}
-  <form method="post" action="/password">
-   <p>Two-step verification password</p>
-   <input name="password" type="password" required><button>Login</button>
-  </form>
- {% endif %}
-{% else %}
-
-{% if view != 'lib' %}<nav><a href="/lib">&#127916; Library</a><a href="/chats">My chats</a><a href="/">Chat browser</a></nav>{% endif %}
-<div id="jobs"></div>
-
-{% if view == 'chats' %}
- <h3>Pick your movie group</h3>
- <input id="flt" placeholder="Filter chats..." oninput="flt()">
- {% for c in chats %}
-  <div class="msg chat"><b>{{c.name}}</b>
-   <span class="small">{% if c.forum %}&#9733; topics group{% elif c.bot %}bot{% endif %}</span>
-   <div class="acts">
-    <a href="/lib?chat={{c.id}}"><button type="button" class="st">Library</button></a>
-    <a href="/?chat={{c.id}}"><button type="button">Messages</button></a>
-   </div>
-  </div>
- {% endfor %}
- <script>function flt(){const v=document.getElementById('flt').value.toLowerCase();
-  document.querySelectorAll('.chat').forEach(e=>e.style.display=e.textContent.toLowerCase().includes(v)?'':'none');}</script>
-
+ <main class="login"><h1>Screenroom</h1><p>Sign in with your Telegram phone number.</p>
+ {% if stage == 'phone' %}<form method="post" action="/login"><input name="phone" placeholder="+ country code and phone number" required><button>Send code</button></form>
+ {% elif stage == 'code' %}<form method="post" action="/code"><input name="code" inputmode="numeric" placeholder="Telegram login code" required><button>Sign in</button></form>
+ {% else %}<form method="post" action="/password"><input name="password" type="password" placeholder="Two step verification password" required><button>Sign in</button></form>{% endif %}
+ </main>
+{% elif view == 'group_error' %}
+ <main class="login"><h1>Group unavailable</h1><p>Check that <code>TG_GROUP</code> names a group this Telegram account can access.</p></main>
 {% elif view == 'lib' %}
+ {% macro cards(groups) %}
+ {% for g in groups %}<a class="card" href="/lib/show?key={{g.key}}"><div class="poster"><span>{{g.title[:1]}}</span><img loading="lazy" src="{{g.poster_url or ('/thumb?mid=' ~ g.thumb_mid)}}" onerror="this.remove()"></div><div class="ct">{{g.title}}</div><div class="cs">{{g.sub}}</div></a>{% endfor %}
+ {% endmacro %}
+ <header class="catalog-head"><a class="brand" href="/lib"><span class="brand-mark">▶</span><span>SCREEN<span class="brand-light">ROOM</span></span></a><span class="small">Telegram library</span></header>
  {% set featured = (grid[0] if grid else (sections[0].groups[0] if sections and sections[0].groups else none)) %}
- <header class="catalog-head">
-  <a class="brand" href="/lib?chat={{chat|urlencode}}"><span class="brand-mark">▶</span><span>SCREEN<span class="brand-light">ROOM</span></span></a>
-  <div class="head-actions">
-   <a class="nav-link" href="/chats">Choose library</a>
-   <a class="nav-link" href="/">Telegram</a>
-  </div>
- </header>
- {% if featured %}
- <section class="hero">
-  <img class="hero-art" src="{{featured.backdrop_url or featured.poster_url or ('/thumb?chat=' ~ (chat|urlencode) ~ '&mid=' ~ featured.thumb_mid)}}" alt="" onerror="this.style.display='none'">
-  <div class="hero-shade"></div>
-  <div class="hero-copy">
-   <div class="eyebrow"><span class="live-dot"></span> YOUR LIBRARY <span class="eyebrow-sep">/</span> FEATURED{% if featured.tmdb %} <span class="eyebrow-sep">· TMDB</span>{% endif %}</div>
-   <h1>{{featured.title}}</h1>
-   <p class="hero-description">{% if featured.tmdb and featured.tmdb.overview %}{{featured.tmdb.overview}}{% else %}{{featured.sub or 'Ready when you are.'}}{% endif %}</p>
-   {% if featured.tmdb and featured.tmdb.vote_average %}<div class="hero-rating"><span>★ {{'%.1f'|format(featured.tmdb.vote_average)}}</span>{% if featured.year %}<span>{{featured.year}}</span>{% endif %}</div>{% endif %}
-   <a class="play-cta" href="/lib/show?chat={{chat|urlencode}}&key={{featured.key}}"><span>▶</span> Browse title</a>
-  </div>
-  <div class="hero-count">{{(grid|length if grid is not none else (sections[0].groups|length if sections else 0))}} titles in view</div>
- </section>
- {% endif %}
+ {% if featured %}<section class="hero"><img class="hero-art" src="{{featured.backdrop_url or featured.poster_url or ('/thumb?mid=' ~ featured.thumb_mid)}}" alt="" onerror="this.style.display='none'"><div class="hero-shade"></div><div class="hero-copy"><div class="eyebrow"><span class="live-dot"></span> YOUR LIBRARY{% if featured.tmdb %} · TMDB{% endif %}</div><h1>{{featured.title}}</h1><p class="hero-description">{% if featured.tmdb and featured.tmdb.overview %}{{featured.tmdb.overview}}{% else %}{{featured.sub or 'Ready when you are.'}}{% endif %}</p><a class="play-cta" href="/lib/show?key={{featured.key}}">Browse files</a></div><div class="hero-count">{{grid|length if grid is not none else (sections[0].groups|length if sections else 0)}} titles in view</div></section>{% endif %}
  <div id="sync" class="small"></div>
- <div class="library-toolbar"><div><div class="eyebrow">THE COLLECTION</div><h2>{{'Search results' if q else 'Browse all titles'}}</h2></div>
- <form method="get" action="/lib" class="row search-form">
-  <input type="hidden" name="chat" value="{{chat}}">
-  <span class="search-icon">⌕</span><input name="q" value="{{q}}" placeholder="Search movies and shows"><button aria-label="Search">Search</button>
- </form></div>
- <div class="chips">
-  <a class="chip {{'on' if not t and not q}}" href="/lib?chat={{chat|urlencode}}">Home</a>
-  {% for tp in topics %}
-   <a class="chip {{'on' if t == tp.id|string}}" href="/lib?chat={{chat|urlencode}}&t={{tp.id}}">{{tp.title}} ({{tp.n}})</a>
-  {% endfor %}
- </div>
- {% if grid is not none %}
-  {% if grid %}<div class="grid">{{ cards(chat, grid) }}</div>
-  {% else %}<p class="small">Nothing found.</p>{% endif %}
- {% else %}
-  {% for sec in sections %}
-   <h4>{{sec.title}}
-    {% if sec.tid %}<a class="small" href="/lib?chat={{chat|urlencode}}&t={{sec.tid}}">See all</a>{% endif %}</h4>
-   <div class="rowscroll">{{ cards(chat, sec.groups) }}</div>
-  {% endfor %}
-  {% if not sections %}<p class="small">Nothing here yet. The first scan of a big group can take a minute.</p>{% endif %}
- {% endif %}
- <details class="maintenance"><summary>Library maintenance</summary><div class="row" style="margin-top:14px">
-  <form method="post" action="/lib/sync"><input type="hidden" name="chat" value="{{chat}}"><button>Sync now</button></form>
-  <form method="post" action="/lib/sync" onsubmit="return confirm('Re-scan the whole group from scratch?')">
-   <input type="hidden" name="chat" value="{{chat}}"><input type="hidden" name="full" value="1"><button>Full rescan</button></form>
- </div><p class="small">Sync fetches new messages. Full rescan rebuilds the library index.</p></details>
- <script>
- const chat = {{chat|tojson}}; let was=false, metadataWas=false;
- async function sync(){
-  try{
-   const r=await fetch('/lib/status?chat='+encodeURIComponent(chat)); const s=await r.json();
-   const el=document.getElementById('sync');
-   if(s.running){was=true; el.textContent='Syncing... scanned '+s.scanned+' messages, '+s.found+' files found';}
-   else if(s.metadata_running){metadataWas=true; el.textContent='Finding movie artwork and details…';}
-   else{ if(was || (metadataWas && !s.metadata_error)){location.reload();return;}
-    el.textContent = s.metadata_error ? 'TMDB lookup unavailable; showing Telegram artwork.' : (s.error ? 'Sync error: '+s.error : (s.last ? 'Last sync: '+new Date(s.last*1000).toLocaleTimeString() : '')); }
-  }catch(e){}
- }
- sync(); setInterval(sync,2000);
- </script>
-
+ <div class="library-toolbar"><div><div class="eyebrow">THE COLLECTION</div><h2>{{'Search results' if q else 'Browse all titles'}}</h2></div><form method="get" action="/lib" class="row search-form"><span class="search-icon">⌕</span><input name="q" value="{{q}}" placeholder="Search movies and shows"><button aria-label="Search">Search</button></form></div>
+ <div class="chips"><a class="chip {{'on' if not t and not q}}" href="/lib">Home</a>{% for tp in topics %}<a class="chip {{'on' if t == tp.id|string}}" href="/lib?t={{tp.id}}">{{tp.title}} ({{tp.n}})</a>{% endfor %}</div>
+ {% if grid is not none %}{% if grid %}<div class="grid">{{cards(grid)}}</div>{% else %}<p class="small">Nothing found.</p>{% endif %}
+ {% else %}{% for sec in sections %}<h4>{{sec.title}}{% if sec.tid %} <a class="small" href="/lib?t={{sec.tid}}">See all</a>{% endif %}</h4><div class="rowscroll">{{cards(sec.groups)}}</div>{% endfor %}{% if not sections %}<p class="small">Nothing here yet. The first scan can take a while.</p>{% endif %}{% endif %}
+ <details class="maintenance"><summary>Library maintenance</summary><div class="row" style="margin-top:14px"><form method="post" action="/lib/sync"><button>Sync now</button></form><form method="post" action="/lib/sync" onsubmit="return confirm('Re-scan the whole group from scratch?')"><input type="hidden" name="full" value="1"><button>Full rescan</button></form></div></details>
+ {% if metadata_enabled %}<details class="credits"><summary>Credits & data sources</summary><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p></details>{% endif %}
+ <script>(()=>{let was=false,metadataWas=false;async function sync(){try{const s=await(await fetch('/lib/status')).json(),el=document.getElementById('sync');if(s.running){was=true;el.textContent='Syncing... scanned '+s.scanned+' messages, '+s.found+' files found';}else if(s.metadata_running){metadataWas=true;el.textContent='Finding movie artwork and details…';}else if(was||(metadataWas&&!s.metadata_error)){location.reload();}else{el.textContent=s.error?'Sync error: '+s.error:(s.metadata_error?'TMDB lookup unavailable; showing Telegram artwork.':(s.last?'Last sync: '+new Date(s.last*1000).toLocaleTimeString():''));}}catch(_){}}sync();setInterval(sync,2500);})();</script>
 {% elif view == 'show' %}
- <p><a href="/lib?chat={{chat|urlencode}}">&larr; Library</a></p>
- {% if tmdb %}<section class="title-metadata" {% if tmdb.backdrop_url %}style="--title-backdrop:url('{{tmdb.backdrop_url}}')"{% endif %}>
-  {% if tmdb.poster_url %}<img src="{{tmdb.poster_url}}" alt="{{name}} poster">{% endif %}<div>
-   <div class="eyebrow">MOVIE{% if tmdb.release_date %} · {{tmdb.release_date[:4]}}{% endif %}{% if tmdb.vote_average %} · ★ {{'%.1f'|format(tmdb.vote_average)}}{% endif %}</div>
-   <h1>{{name}}</h1><p>{{tmdb.overview}}</p><a class="tmdb-link" href="https://www.themoviedb.org/movie/{{tmdb.tmdb_id}}" target="_blank" rel="noopener">View on TMDB ↗</a>
-  </div></section>{% endif %}
- {% if not tmdb %}<h3>{{name}}</h3>{% endif %}
- <details><summary class="small">Fix title / merge with another</summary>
-  <form method="post" action="/lib/rename" class="row">
-   <input type="hidden" name="chat" value="{{chat}}"><input type="hidden" name="key" value="{{key}}">
-   <input name="name" value="{{name}}" required><button>Save</button>
-  </form>
-  <p class="small">Type the exact title of another show to merge the two.</p>
- </details>
- {% for sec in seasons %}
-  <details {{'open' if loop.first}}><summary>{{sec.label}} <span class="small">({{sec.files|length}})</span></summary>
-   {% for it in sec.files %}
-    <div class="msg">
-     <div><b>{{it.tag}}</b> {{it.fname}} <span class="small">&middot; {{it.size|human}}</span></div>
-     {{ actions(chat, it.mid, it.fname, it.surl, port) }}
-    </div>
-   {% endfor %}
-  </details>
- {% endfor %}
-
-{% else %}
- <form method="get" action="/" class="row">
-  <input name="chat" value="{{chat}}" placeholder="@botusername or chat id" required>
-  <button>Open</button>
- </form>
- {% if chat %}
- <form method="post" action="/send" class="row" style="margin-top:6px">
-  <input type="hidden" name="chat" value="{{chat}}">
-  <input name="text" placeholder="Send a message" required><button>Send</button>
- </form>
- <p><a href="/?chat={{chat|urlencode}}">&#8635; Refresh</a>
-   <span class="small">(wait a few seconds after sending, then refresh)</span></p>
- {% for m in msgs %}
-  <div class="msg {{'mine' if m.mine}}">
-   {% if m.text %}<div>{{m.text}}</div>{% endif %}
-   {% if m.btns %}<div class="btns">
-    {% for b in m.btns %}
-     {% if b.url %}<a href="{{b.url}}" target="_blank"><button type="button">{{b.text}} &#8599;</button></a>
-     {% else %}
-      <form method="post" action="/click">
-       <input type="hidden" name="chat" value="{{chat}}"><input type="hidden" name="mid" value="{{m.id}}">
-       <input type="hidden" name="i" value="{{b.i}}"><input type="hidden" name="j" value="{{b.j}}">
-       <button>{{b.text}}</button>
-      </form>
-     {% endif %}
-    {% endfor %}</div>
-   {% endif %}
-   {% if m.fname %}
-    <div class="small" style="margin-top:6px">&#128193; {{m.fname}} &middot; {{m.size|human}}</div>
-    {{ actions(chat, m.id, m.fname, m.surl, port) }}
-   {% endif %}
-  </div>
- {% endfor %}
- {% endif %}
-{% endif %}
-
-<p class="small">Downloads save to: {{dl_dir}}</p>
-{% if view == 'lib' and metadata_enabled %}<details class="credits"><summary>Credits & data sources</summary><div class="credits-body"><a href="https://www.themoviedb.org" target="_blank" rel="noopener"><img class="tmdb-logo" src="https://www.themoviedb.org/assets/2/v4/logos/v2/blue_square_1-5bdc75aaebeb75dc7ae79426ddd9be3b2be1e342510f8202baf6bffa71d7f5c4.svg" alt="TMDB"></a><p>This product uses the TMDB API but is not endorsed or certified by TMDB.</p><a href="https://www.themoviedb.org" target="_blank" rel="noopener">The Movie Database ↗</a></div></details>{% endif %}
-<script>
- function copyLink(u){
-  if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>alert('Link copied. In your player: Open network stream / URL.'));}
-  else{prompt('Copy this link:',u);}
- }
- async function tick(){
-  try{
-   const r = await fetch('/jobs'); const j = await r.json();
-   const box = document.getElementById('jobs'); if(!box) return; box.innerHTML='';
-   for(const k in j){
-    const x=j[k]; const pct = x.total? Math.round(100*x.done/x.total):0;
-    let line = x.name+' \\u2014 '+(x.status==='running'? pct+'%' : x.status);
-    if(x.error) line += ': '+x.error;
-    const d = document.createElement('div'); d.className='small'; d.textContent=line; box.appendChild(d);
-    if(x.status==='running'){const p=document.createElement('progress'); p.max=100; p.value=pct; box.appendChild(p);}
-   }
-  }catch(e){}
- }
- tick(); setInterval(tick, 2000);
-</script>
+ <header class="catalog-head"><a class="brand" href="/lib">← Library</a></header>
+ {% if tmdb %}<section class="title-metadata" {% if tmdb.backdrop_url %}style="--title-backdrop:url('{{tmdb.backdrop_url}}')"{% endif %}>{% if tmdb.poster_url %}<img src="{{tmdb.poster_url}}" alt="{{name}} poster">{% endif %}<div><div class="eyebrow">MOVIE{% if tmdb.release_date %} · {{tmdb.release_date[:4]}}{% endif %}{% if tmdb.vote_average %} · ★ {{'%.1f'|format(tmdb.vote_average)}}{% endif %}</div><h1>{{name}}</h1><p>{{tmdb.overview}}</p><a class="tmdb-link" href="https://www.themoviedb.org/movie/{{tmdb.tmdb_id}}" target="_blank" rel="noopener">View on TMDB ↗</a></div></section>{% else %}<h1>{{name}}</h1>{% endif %}
+ <details><summary class="small">Fix title / merge with another</summary><form method="post" action="/lib/rename" class="row"><input type="hidden" name="key" value="{{key}}"><input name="name" value="{{name}}" required><button>Save</button></form><p class="small">Type the exact title of another show to merge the two.</p></details>
+ {% for sec in seasons %}<details {{'open' if loop.first}}><summary>{{sec.label}} <span class="small">({{sec.files|length}})</span></summary>{% for it in sec.files %}<div class="msg"><div><b>{{it.tag}}</b> {{it.fname}} <span class="small">· {{it.size|human}}</span></div><div class="acts"><a class="full" href="{{it.surl}}" target="_blank"><button type="button" class="st">▶ Stream in browser</button></a><button type="button" class="full" onclick="copyLink('http://localhost:{{port}}{{it.surl}}')">Copy stream link</button></div></div>{% endfor %}</details>{% endfor %}
+ <script>function copyLink(u){if(navigator.clipboard){navigator.clipboard.writeText(u).then(()=>alert('Link copied.'));}else{prompt('Copy this link:',u);}}</script>
 {% endif %}
 </body></html>
-"""
