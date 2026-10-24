@@ -1,0 +1,6 @@
+{% macro render(group) -%}
+<a class="card" href="/lib/show?key={{ group.key|urlencode }}">
+ <div class="poster"><span>{{ group.title[:1] }}</span><img loading="lazy" src="{{ group.poster_url or ('/thumb?mid=' ~ group.thumb_mid) }}" onerror="this.remove()"></div>
+ <div class="ct">{{ group.title }}</div><div class="cs">{{ group.sub }}</div>
+</a>
+{%- endmacro %}

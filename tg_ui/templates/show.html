@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ name }} · Screenroom{% endblock %}
+{% block content %}
+<header class="catalog-head"><a class="brand" href="/lib">← Library</a></header>
+{% if tmdb %}<section class="title-metadata" {% if tmdb.backdrop_url
+    %}style="--title-backdrop:url('{{ tmdb.backdrop_url }}')" {% endif %}>{% if tmdb.poster_url %}<img
+        src="{{ tmdb.poster_url }}" alt="{{ name }} poster">{% endif %}<div>
+        <div class="eyebrow">MOVIE{% if tmdb.release_date %} · {{ tmdb.release_date[:4] }}{% endif %}{% if
+            tmdb.vote_average %} · ★ {{ '%.1f'|format(tmdb.vote_average) }}{% endif %}</div>
+        <h1>{{ name }}</h1>
+        <p>{{ tmdb.overview }}</p><a class="tmdb-link" href="https://www.themoviedb.org/movie/{{ tmdb.tmdb_id }}"
+            target="_blank" rel="noopener">View on TMDB ↗</a>
+    </div>
+</section>{% else %}<h1>{{ name }}</h1>{% endif %}
+<details>
+    <summary class="small">Fix title / merge with another</summary>
+    <form method="post" action="/lib/rename" class="row"><input type="hidden" name="key" value="{{ key }}"><input
+            name="name" value="{{ name }}" required><button>Save</button></form>
+    <p class="small">Type the exact title of another show to merge the two.</p>
+</details>
+{% for sec in seasons %}<details {{ 'open' if loop.first }}>
+    <summary>{{ sec.label }} <span class="small">({{ sec.files|length }})</span></summary>{% for it in sec.files %}<div
+        class="msg">
+        <div><b>{{ it.tag }}</b> {{ it.fname }} <span class="small">· {{ it.size|human }}</span></div>
+        <div class="acts"><a class="full" href="{{ it.surl }}" target="_blank"><button type="button" class="st">▶ Stream
+                    in browser</button></a><button type="button" class="full"
+                onclick="copyLink('http://localhost:{{ port }}{{ it.surl }}')">Copy stream link</button></div>
+    </div>{% endfor %}
+</details>{% endfor %}
+<script>function copyLink(u) { if (navigator.clipboard) { navigator.clipboard.writeText(u).then(() => alert('Link copied.')); } else { prompt('Copy this link:', u); } }</script>
+{% endblock %}
