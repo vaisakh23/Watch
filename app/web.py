@@ -140,17 +140,19 @@ def tmdb_request(path, params):
         return json.loads(response.read().decode("utf-8"))
 
 
-def tmdb_lookup(title, year=None):
+def tmdb_lookup(title, year=None, media_type="movie"):
     params = {"query": title, "include_adult": "false"}
     if year:
-        params["year"] = year
-    results = tmdb_request("search/movie", params).get("results", [])
+        params["first_air_date_year" if media_type == "tv" else "year"] = year
+    results = tmdb_request(f"search/{media_type}", params).get("results", [])
     target = re.sub(r"[^a-z0-9]+", "", title.lower())
     def score(item):
-        name = item.get("title") or item.get("original_title") or ""
+        name = (item.get("name") or item.get("original_name") if media_type == "tv"
+                else item.get("title") or item.get("original_title")) or ""
         candidate = re.sub(r"[^a-z0-9]+", "", name.lower())
         ratio = SequenceMatcher(None, target, candidate).ratio()
-        released = (item.get("release_date") or "")[:4]
+        date_field = "first_air_date" if media_type == "tv" else "release_date"
+        released = (item.get(date_field) or "")[:4]
         if year and released and released != str(year):
             ratio -= .25
         return ratio
@@ -174,20 +176,23 @@ def enrich_tmdb(chat):
 
     def worker():
         try:
-            pending = dbx("""SELECT i.key, MIN(i.title) AS title, MAX(i.year) AS year
+            pending = dbx("""SELECT i.key, MIN(i.title) AS title, MAX(i.year) AS year,
+                    MAX(i.episode IS NOT NULL) AS is_tv
                 FROM items i LEFT JOIN tmdb_meta m ON m.chat=i.chat AND m.key=i.key
-                WHERE i.chat=? AND i.episode IS NULL AND (m.key IS NULL OR m.fetched_at < ?)
+                WHERE i.chat=? AND (m.key IS NULL OR m.fetched_at < ?)
                 GROUP BY i.key ORDER BY MAX(i.date) DESC LIMIT 60""", (chat, int(time.time()) - 30 * 86400))
             for item in pending:
                 try:
-                    result = tmdb_lookup(item["title"], item["year"])
+                    media_type = "tv" if item["is_tv"] else "movie"
+                    result = tmdb_lookup(item["title"], item["year"], media_type)
                     with dblock:
                         db.execute("""INSERT OR REPLACE INTO tmdb_meta
                             (chat,key,tmdb_id,media_type,poster_path,backdrop_path,overview,vote_average,release_date,fetched_at)
                             VALUES (?,?,?,?,?,?,?,?,?,?)""", (chat, item["key"], result.get("id") if result else None,
-                            "movie", result.get("poster_path") if result else None,
+                            media_type, result.get("poster_path") if result else None,
                             result.get("backdrop_path") if result else None, result.get("overview", "") if result else "",
-                            result.get("vote_average") if result else None, result.get("release_date", "") if result else "",
+                            result.get("vote_average") if result else None,
+                            (result.get("first_air_date" if media_type == "tv" else "release_date", "") if result else ""),
                             int(time.time())))
                         db.commit()
                 except Exception:  # noqa: BLE001 - metadata must never block library use

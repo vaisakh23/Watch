@@ -5,10 +5,10 @@
 {% if tmdb %}<section class="title-metadata" {% if tmdb.backdrop_url
     %}style="--title-backdrop:url('{{ tmdb.backdrop_url }}')" {% endif %}>{% if tmdb.poster_url %}<img
         src="{{ tmdb.poster_url }}" alt="{{ name }} poster">{% endif %}<div>
-        <div class="eyebrow">MOVIE{% if tmdb.release_date %} · {{ tmdb.release_date[:4] }}{% endif %}{% if
+        <div class="eyebrow">{{ 'TV SHOW' if tmdb.media_type == 'tv' else 'MOVIE' }}{% if tmdb.release_date %} · {{ tmdb.release_date[:4] }}{% endif %}{% if
             tmdb.vote_average %} · ★ {{ '%.1f'|format(tmdb.vote_average) }}{% endif %}</div>
         <h1>{{ name }}</h1>
-        <p>{{ tmdb.overview }}</p><a class="tmdb-link" href="https://www.themoviedb.org/movie/{{ tmdb.tmdb_id }}"
+        <p>{{ tmdb.overview }}</p><a class="tmdb-link" href="https://www.themoviedb.org/{{ tmdb.media_type }}/{{ tmdb.tmdb_id }}"
             target="_blank" rel="noopener">View on TMDB ↗</a>
     </div>
 </section>{% else %}<h1>{{ name }}</h1>{% endif %}
