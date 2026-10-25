@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<main class="login">
+        <h1>Screenroom</h1>
+        <p>Sign in with your Telegram phone number.</p>
+        {% if stage == 'phone' %}
+        <form method="post" action="/login">
+                <input name="phone" placeholder="+ country code and phone number" required>
+                <button>Send code</button>
+        </form>
+        {% elif stage == 'code' %}
+        <form method="post" action="/code">
+                <input name="code" inputmode="numeric" placeholder="Telegram login code" required>
+                <button>Sign in</button>
+        </form>
+        {% else %}
+        <form method="post" action="/password">
+                <input name="password" type="password" placeholder="Two step verification password" required>
+                <button>Sign in</button>
+        </form>
+        {% endif %}
+</main>
+{% endblock %}

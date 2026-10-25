@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% from "components/title_card.html" import render as title_card %}
+{% block content %}
+<header class="catalog-head">
+	<a class="brand" href="/lib">
+		<span class="brand-mark">▶</span>
+		<span>SCREEN
+			<span class="brand-light">ROOM</span>
+		</span>
+	</a>
+</header>
+{% set featured = (grid[0] if grid else (sections[0].groups[0] if sections and
+sections[0].groups else none)) %} 
+{% if featured %}
+<section class="hero">
+	<img class="hero-art"
+		src="{{ featured.backdrop_url or featured.poster_url }}" alt=""
+		onerror="this.style.display='none'" />
+	<div class="hero-shade"></div>
+	<div class="hero-copy">
+		<div class="eyebrow">
+			<span class="live-dot"></span> YOUR LIBRARY{% if featured.tmdb %} · TMDB{%
+			endif %}
+		</div>
+		<h1>{{ featured.title }}</h1>
+		<p class="hero-description">
+			{% if featured.tmdb and featured.tmdb.overview %}
+				{{ featured.tmdb.overview }}
+			{% else %}
+				{{ featured.sub or 'Ready when you are.' }}
+			{% endif %}
+		</p>
+		<a class="play-cta" href="/lib/show?key={{ featured.key|urlencode }}">Browse files</a>
+	</div>
+</section>
+{% endif %}
+<div id="sync" class="small"></div>
+<div class="library-toolbar">
+	<div>
+		<div class="eyebrow">THE COLLECTION</div>
+		<h2>{{ 'Search results' if q else 'Browse all titles' }}</h2>
+	</div>
+	<form method="get" action="/lib" class="row search-form">
+		<span class="search-icon">⌕</span>
+		<input name="q" value="{{ q }}" placeholder="Search movies and shows" />
+		<button aria-label="Search">Search</button>
+	</form>
+</div>
+<div class="chips">
+	<a class="chip {{ 'on' if not t and not q }}" href="/lib">Home</a>
+	{% for tp in topics %}
+	<a class="chip {{ 'on' if t == tp.id|string }}" href="/lib?t={{ tp.id }}">{{ tp.title }} ({{ tp.n }})
+	</a>
+	{% endfor %}
+</div>
+{% if grid is not none %} 
+	{% if grid %}
+	<div class="grid">
+		{% for group in grid %}{{ title_card(group) }}{% endfor %}
+	</div>
+	{% else %}
+	<p class="small">Nothing found.</p>
+	{% endif %} 
+{% else %}
+	{% for sec in sections %}
+	<h4>
+		{{ sec.title }}
+		{% if sec.tid %}
+			<a class="small" href="/lib?t={{ sec.tid }}">See all</a>
+		{% endif %}
+	</h4>
+	<div class="rowscroll">
+		{% for group in sec.groups %}{{ title_card(group) }}{% endfor %}
+	</div>
+	{% endfor %}
+	{% if not sections %}
+	<p class="small">Nothing here yet. The first scan can take a while.</p>
+	{% endif %}
+{% endif %}
+<details class="maintenance">
+	<summary>Library maintenance</summary>
+	<div class="row" style="margin-top: 14px">
+		<form method="post" action="/lib/sync"><button>Sync now</button></form>
+		<form method="post" action="/lib/sync" onsubmit="return confirm('Re-scan the whole group from scratch?')">
+			<input type="hidden" name="full" value="1" /><button>Full rescan</button>
+		</form>
+	</div>
+</details>
+
+<script>
+	(() => {
+		let was = false,
+			metadataWas = false;
+		async function sync() {
+			try {
+				const s = await (await fetch("/lib/status")).json(),
+					el = document.getElementById("sync");
+				if (s.running) {
+					was = true;
+					el.textContent =
+						"Syncing... scanned " +
+						s.scanned +
+						" messages, " +
+						s.found +
+						" files found";
+				} else if (s.metadata_running) {
+					metadataWas = true;
+					el.textContent = "Finding movie artwork and details…";
+				} else if (was || (metadataWas && !s.metadata_error)) {
+					location.reload();
+				} else {
+					el.textContent = s.error
+						? "Sync error: " + s.error
+						: s.metadata_error
+							? "TMDB lookup unavailable"
+							: s.last
+								? "Last sync: " + new Date(s.last * 1000).toLocaleTimeString()
+								: "";
+				}
+			} catch (_) { }
+		}
+		sync();
+		setInterval(sync, 2500);
+	})();
+</script>
+{% endblock %}
