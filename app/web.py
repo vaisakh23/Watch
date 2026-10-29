@@ -1,4 +1,5 @@
 import json
+import logging
 import mimetypes
 import queue
 import re
@@ -18,6 +19,7 @@ from .database import db, dbx, dblock
 from .telegram import _get_msg, _next, maybe_sync, start_sync, sync_state
 
 app = Flask(__name__)
+logger = logging.getLogger(__name__)
 
 
 def human(n):
@@ -356,23 +358,29 @@ def parse_range(header, size):
     """Return (start, end) inclusive, None if no Range header, or 'bad'."""
     if not header:
         return None
-    m = re.match(r"bytes=(\d*)-(\d*)$", header.strip())
+    m = re.fullmatch(r"bytes=(\d*)-(\d*)", header.strip(), re.IGNORECASE)
     if not m:
-        return None
+        return "bad"
     s, e = m.groups()
     if s == "" and e == "":
-        return None
-    if s == "":
-        start, end = max(size - int(e), 0), size - 1
-    else:
-        start = int(s)
-        end = min(int(e), size - 1) if e else size - 1
-    if start > end or start >= size:
+        return "bad"
+    try:
+        if s == "":
+            suffix_length = int(e)
+            if suffix_length <= 0:
+                return "bad"
+            start, end = max(size - suffix_length, 0), size - 1
+        else:
+            start = int(s)
+            end = min(int(e), size - 1) if e else size - 1
+    except ValueError:
+        return "bad"
+    if start < 0 or start > end or start >= size:
         return "bad"
     return start, end
 
 
-@app.route("/stream/<int:mid>/<path:fname>")
+@app.route("/stream/<int:mid>/<path:fname>", methods=["GET", "HEAD"])
 def stream(mid, fname):
     if not authed():
         abort(403)
@@ -397,12 +405,21 @@ def stream(mid, fname):
     aligned = start - (start % CHUNK)
     skip = start - aligned
 
-    def open_iter(m):
-        return m.client.iter_download(m.media, offset=aligned, request_size=CHUNK, file_size=size)
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(length), "Content-Type": mime,
+               "Content-Disposition": f'inline; filename="{quote(fname)}"', "Cache-Control": "no-store"}
+    if rng:
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    status = 206 if rng else 200
+    if request.method == "HEAD":
+        return Response(status=status, headers=headers)
 
-    it = open_iter(msg)
+    def open_iter(m, offset):
+        return m.client.iter_download(m.media, offset=offset, request_size=CHUNK, file_size=size)
+
     q = queue.Queue(maxsize=PREFETCH)
     stop = threading.Event()
+    stream_started = time.monotonic()
+    bytes_sent = 0
 
     def put(item):
         while not stop.is_set():
@@ -414,55 +431,82 @@ def stream(mid, fname):
         return False
 
     def producer():
-        nonlocal it
+        it = None
         retried = False
+        produced = 0
         try:
-            while not stop.is_set():
+            it = open_iter(msg, aligned)
+            while not stop.is_set() and produced < skip + length:
                 try:
-                    chunk = run(_next(it))
+                    chunk = bytes(run(_next(it)))
                 except StopAsyncIteration:
                     break
                 except Exception:  # noqa: BLE001
                     if retried:
                         raise
-                    retried = True   # file reference may have expired: refetch the message once
+                    retried = True
                     fresh = run(_get_msg(chat, mid, fresh=True))
-                    it = open_iter(fresh)
+                    if not fresh or not fresh.file:
+                        raise RuntimeError("Telegram message or media is no longer available")
+                    try:
+                        run(it.close())
+                    except Exception:  # noqa: BLE001
+                        pass
+                    it = open_iter(fresh, aligned + produced)
                     continue
+
+                chunk = chunk[:skip + length - produced]
+                if not chunk:
+                    break
+                produced += len(chunk)
                 if not put(chunk):
                     return
         except Exception as e:  # noqa: BLE001
+            logger.exception("Telegram stream failed (chat=%s, message=%s)", chat, mid)
             put(e)
         finally:
             put(None)
-            try:
-                run(it.close())
-            except Exception:  # noqa: BLE001
-                pass
+            if it is not None:
+                try:
+                    run(it.close())
+                except Exception:  # noqa: BLE001
+                    pass
 
     threading.Thread(target=producer, daemon=True).start()
+    logger.info("Telegram stream started (chat=%s, message=%s, range=%s-%s)", chat, mid, start, end)
 
     def gen():
+        nonlocal bytes_sent
         remaining, to_skip = length, skip
+        outcome = "complete"
         try:
             while remaining > 0:
                 chunk = q.get()
-                if chunk is None or isinstance(chunk, Exception):
+                if chunk is None:
+                    if remaining:
+                        outcome = "truncated"
+                    break
+                if isinstance(chunk, Exception):
+                    outcome = "error"
                     break
                 chunk = bytes(chunk)
                 if to_skip:
-                    chunk, to_skip = chunk[to_skip:], 0
-                if len(chunk) > remaining:
-                    chunk = chunk[:remaining]
+                    chunk, to_skip = chunk[to_skip:], b""
+                chunk = chunk[:remaining]
                 remaining -= len(chunk)
-                yield chunk
+                bytes_sent += len(chunk)
+                if chunk:
+                    yield chunk
+        except GeneratorExit:
+            outcome = "cancelled"
+            raise
         finally:
             stop.set()
+            duration = max(time.monotonic() - stream_started, 0.001)
+            logger.info(
+                "Telegram stream %s (chat=%s, message=%s, bytes=%s/%s, duration=%.3fs, avg_mbps=%.3f)",
+                outcome, chat, mid, bytes_sent, length, duration, bytes_sent * 8 / duration / 1_000_000,
+            )
 
-    headers = {"Accept-Ranges": "bytes", "Content-Length": str(length), "Content-Type": mime,
-               "Content-Disposition": f'inline; filename="{quote(fname)}"', "Cache-Control": "no-store"}
-    if rng:
-        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-        return Response(gen(), status=206, headers=headers, direct_passthrough=True)
-    return Response(gen(), status=200, headers=headers, direct_passthrough=True)
+    return Response(gen(), status=status, headers=headers, direct_passthrough=True)
 
