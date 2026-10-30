@@ -79,6 +79,8 @@ def lib_status():
         running=bool(st.get("running")),
         scanned=st.get("scanned", 0),
         found=st.get("found", 0),
+        phase=st.get("phase"),
+        total=st.get("total", 0),
         error=st.get("error"),
         last=r[0]["synced_at"] if r else None,
         metadata_running=bool(metadata.get("running")),
@@ -93,7 +95,7 @@ def lib_sync():
     if not authed():
         abort(403)
     chat = required_chat()
-    start_sync(chat, full=request.form.get("full") == "1")
+    start_sync(chat, changes=request.form.get("changes") == "1")
     return redirect("/lib")
 
 

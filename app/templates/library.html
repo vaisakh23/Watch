@@ -81,8 +81,8 @@ sections[0].groups else none)) %}
 	<summary>Library maintenance</summary>
 	<div class="row" style="margin-top: 14px">
 		<form method="post" action="/lib/sync"><button>Sync now</button></form>
-		<form method="post" action="/lib/sync" onsubmit="return confirm('Re-scan the whole group from scratch?')">
-			<input type="hidden" name="full" value="1" /><button>Full rescan</button>
+		<form method="post" action="/lib/sync">
+			<input type="hidden" name="changes" value="1" /><button>Sync changes</button>
 		</form>
 	</div>
 </details>
@@ -98,11 +98,9 @@ sections[0].groups else none)) %}
 				if (s.running) {
 					was = true;
 					el.textContent =
-						"Syncing... scanned " +
-						s.scanned +
-						" messages, " +
-						s.found +
-						" files found";
+						s.phase === "checking existing messages"
+							? `Checking existing messages... ${s.scanned} of ${s.total} checked; ${s.found} items found`
+							: `Syncing... scanned ${s.scanned} messages, ${s.found} files found`;
 				} else if (s.metadata_running) {
 					metadataWas = true;
 					el.textContent = "Finding movie artwork and details…";

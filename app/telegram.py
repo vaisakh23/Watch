@@ -114,12 +114,14 @@ def register_message_handlers():
 sync_state = {}  # chat -> dict(running, scanned, found, error, done_at)
 
 
-def start_sync(chat, full=False):
+def start_sync(chat, changes=False):
     st = sync_state.setdefault(chat, {})
     if st.get("running"):
         return
-    st.update(running=True, scanned=0, found=0, error=None)
-    asyncio.run_coroutine_threadsafe(_sync(chat, full), loop)
+    st.update(
+        running=True, scanned=0, found=0, total=0, error=None, phase="starting"
+    )
+    asyncio.run_coroutine_threadsafe(_sync(chat, changes), loop)
 
 
 def maybe_sync(chat):
@@ -136,9 +138,16 @@ def maybe_sync(chat):
         start_sync(chat)
 
 
-async def _sync(chat, full=False):
+async def _sync(chat, changes=False):
     st = sync_state.setdefault(chat, {})
-    st.update(running=True, scanned=0, found=0, error=None)
+    st.update(
+        running=True,
+        scanned=0,
+        found=0,
+        total=0,
+        error=None,
+        phase="checking existing messages" if changes else "scanning new messages",
+    )
     try:
         peer = await _peer(chat)
         ent = await config.client.get_entity(peer)
@@ -156,13 +165,41 @@ async def _sync(chat, full=False):
         except Exception:  # noqa: BLE001  (not a forum group)
             pass
 
-        if full:
-            dbx("DELETE FROM items WHERE chat=?", (chat,))
-            dbx("DELETE FROM meta WHERE chat=?", (chat,))
-
         r = dbx("SELECT last_id FROM meta WHERE chat=?", (chat,))
         last = r[0]["last_id"] if r else 0
         alias = _aliases(chat)
+
+        if changes:
+            # Re-fetch indexed messages in chunks to repair missed edits/deletions.
+            r = dbx("SELECT COUNT(*) AS total FROM items WHERE chat=?", (chat,))
+            st["total"] = r[0]["total"] if r else 0
+            last_mid = 0
+            while True:
+                rows = dbx(
+                    "SELECT mid FROM items WHERE chat=? AND mid>? ORDER BY mid LIMIT 100",
+                    (chat, last_mid),
+                )
+                batch_ids = [r["mid"] for r in rows]
+                if not batch_ids:
+                    break
+                last_mid = batch_ids[-1]
+                messages = await config.client.get_messages(ent, ids=batch_ids)
+                by_id = {m.id: m for m in messages if m}
+                for mid in batch_ids:
+                    m = by_id.get(mid)
+                    if m:
+                        row = _item_row(chat, m, alias)
+                        if row:
+                            save_items([row])
+                            st["found"] += 1
+                        else:
+                            dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                    else:
+                        dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                    msg_cache.pop((chat, mid), None)
+                    st["scanned"] += 1
+
+        st["phase"] = "scanning new messages"
         newmax, batch = last, []
         async for m in config.client.iter_messages(
             ent, min_id=last
@@ -186,6 +223,7 @@ async def _sync(chat, full=False):
         st["error"] = str(e)
     finally:
         st["running"] = False
+        st["phase"] = "done"
         st["done_at"] = time.time()
 
 
