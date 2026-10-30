@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 
-from telethon import functions
+from telethon import events, functions
 
 from . import config
 from .config import loop, run, _peer
@@ -27,6 +27,90 @@ def topic_of(m):
     return 1
 
 
+def _aliases(chat):
+    return {
+        a["old_key"]: (a["new_key"], a["new_title"])
+        for a in dbx("SELECT * FROM alias WHERE chat=?", (chat,))
+    }
+
+
+def _item_row(chat, m, alias=None):
+    """Build the database row for a supported media message, or return None."""
+    f = m.file
+    if not f or not is_media(f):
+        return None
+    name = f.name or (m.text or "").split("\n")[0].strip() or f"file_{m.id}"
+    if not os.path.splitext(name)[1]:
+        name += f.ext or ""
+    info = parse(name, m.text or "")
+    aliases = alias if alias is not None else _aliases(chat)
+    key, title = apply_alias(aliases, make_key(info), info["title"])
+    return (
+        chat,
+        m.id,
+        topic_of(m),
+        name,
+        f.size or 0,
+        int(m.date.timestamp()),
+        title,
+        key,
+        info["season"],
+        info["episode"],
+        info["year"],
+    )
+
+
+_handlers_registered = False
+
+
+async def _event_chat():
+    chat = config._configured_chat_id
+    if chat is None:
+        chat = await config._resolve_configured_group()
+        config._configured_chat_id = chat
+    return chat
+
+
+def register_message_handlers():
+    """Listen for library changes. Call after connecting the Telethon client."""
+    global _handlers_registered
+    if _handlers_registered:
+        return
+
+    async def on_message(event):
+        try:
+            chat = await _event_chat()
+            if event.chat_id != int(chat):
+                return
+            m = event.message
+            row = _item_row(chat, m)
+            if row:
+                save_items([row])
+            else:
+                dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, m.id))
+            msg_cache.pop((chat, m.id), None)
+        except Exception as e:  # noqa: BLE001
+            print(f"Telegram message event failed: {e}")
+
+    async def on_deleted(event):
+        if event.chat_id is None:
+            return
+        try:
+            chat = await _event_chat()
+            if event.chat_id != int(chat):
+                return
+            for mid in event.deleted_ids:
+                dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                msg_cache.pop((chat, mid), None)
+        except Exception as e:  # noqa: BLE001
+            print(f"Telegram deletion event failed: {e}")
+
+    config.client.add_event_handler(on_message, events.NewMessage())
+    config.client.add_event_handler(on_message, events.MessageEdited())
+    config.client.add_event_handler(on_deleted, events.MessageDeleted())
+    _handlers_registered = True
+
+
 sync_state = {}  # chat -> dict(running, scanned, found, error, done_at)
 
 
@@ -45,7 +129,10 @@ def maybe_sync(chat):
     r = dbx("SELECT synced_at FROM meta WHERE chat=?", (chat,))
     last = r[0]["synced_at"] if r else 0
     now = time.time()
-    if now - last > settings.sync_every and now - st.get("done_at", 0) > settings.sync_every:
+    if (
+        now - last > settings.sync_every
+        and now - st.get("done_at", 0) > settings.sync_every
+    ):
         start_sync(chat)
 
 
@@ -75,40 +162,17 @@ async def _sync(chat, full=False):
 
         r = dbx("SELECT last_id FROM meta WHERE chat=?", (chat,))
         last = r[0]["last_id"] if r else 0
-        alias = {
-            a["old_key"]: (a["new_key"], a["new_title"])
-            for a in dbx("SELECT * FROM alias WHERE chat=?", (chat,))
-        }
-
+        alias = _aliases(chat)
         newmax, batch = last, []
         async for m in config.client.iter_messages(
             ent, min_id=last
         ):  # only messages newer than last sync
             st["scanned"] += 1
             newmax = max(newmax, m.id)
-            f = m.file
-            if not f or not is_media(f):
+            row = _item_row(chat, m, alias)
+            if not row:
                 continue
-            name = f.name or (m.text or "").split("\n")[0].strip() or f"file_{m.id}"
-            if not os.path.splitext(name)[1]:
-                name += f.ext or ""
-            info = parse(name, m.text or "")
-            key, title = apply_alias(alias, make_key(info), info["title"])
-            batch.append(
-                (
-                    chat,
-                    m.id,
-                    topic_of(m),
-                    name,
-                    f.size or 0,
-                    int(m.date.timestamp()),
-                    title,
-                    key,
-                    info["season"],
-                    info["episode"],
-                    info["year"],
-                )
-            )
+            batch.append(row)
             st["found"] += 1
             if len(batch) >= 200:
                 save_items(batch)
@@ -142,5 +206,3 @@ async def _get_msg(chat, mid, fresh=False):
 
 async def _next(it):
     return await it.__anext__()
-
-
