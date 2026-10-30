@@ -8,8 +8,8 @@ from ..helpers.auth import authed
 from ..helpers.chat import default_chat, required_chat
 from ..helpers.library import group_rows, metadata_for, topic_list
 from ..helpers.presentation import page
-from ..helpers.tmdb import TMDB_API_KEY, TMDB_TOKEN, enrich_tmdb, tmdb_state
-from ..settings import TG_GROUP
+from ..helpers.tmdb import enrich_tmdb, tmdb_state
+from ..settings import settings
 from ..telegram import maybe_sync, start_sync, sync_state
 
 library_blueprint = Blueprint("library", __name__)
@@ -23,7 +23,7 @@ def lib():
         chat = default_chat()
     except Exception as e:  # noqa: BLE001 - login is required before resolving Telegram usernames
         return page(
-            view="group_error", err=f"Could not resolve TG_GROUP {TG_GROUP!r}: {e}"
+            view="group_error", err=f"Could not resolve TG_GROUP {settings.tg_group!r}: {e}"
         )
 
     # - q is the search text, e.g. /lib?q=Interstellar.
@@ -63,7 +63,7 @@ def lib():
         topics=topics,
         sections=sections,
         grid=grid,
-        metadata_enabled=bool(TMDB_TOKEN or TMDB_API_KEY),
+        metadata_enabled=bool(settings.tmdb_token or settings.tmdb_api_key),
     )
 
 
@@ -83,7 +83,7 @@ def lib_status():
         last=r[0]["synced_at"] if r else None,
         metadata_running=bool(metadata.get("running")),
         metadata_done=metadata.get("done", 0),
-        metadata_enabled=bool(TMDB_TOKEN or TMDB_API_KEY),
+        metadata_enabled=bool(settings.tmdb_token or settings.tmdb_api_key),
         metadata_error=metadata.get("error"),
     )
 

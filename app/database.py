@@ -3,11 +3,11 @@
 import sqlite3
 import threading
 
-from .settings import DB_PATH
+from .settings import settings
 
 # ----------------------------- database -----------------------------
 
-db = sqlite3.connect(DB_PATH, check_same_thread=False)
+db = sqlite3.connect(settings.db_path, check_same_thread=False)
 db.row_factory = sqlite3.Row
 dblock = threading.RLock()
 db.executescript("""

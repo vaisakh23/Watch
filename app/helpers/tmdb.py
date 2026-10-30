@@ -7,19 +7,19 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from ..database import db, dbx, dblock
-from ..settings import TMDB_API_KEY, TMDB_LANGUAGE, TMDB_TOKEN
+from ..settings import settings
 
 tmdb_state = {}  # chat -> metadata enrichment status
 tmdb_lock = threading.Lock()
 
 
 def tmdb_request(path, params):
-    params = dict(params, language=TMDB_LANGUAGE)
+    params = dict(params, language=settings.tmdb_language)
     headers = {"Accept": "application/json", "User-Agent": "TG-UI/0.1"}
-    if TMDB_TOKEN:
-        headers["Authorization"] = f"Bearer {TMDB_TOKEN}"
+    if settings.tmdb_token:
+        headers["Authorization"] = f"Bearer {settings.tmdb_token}"
     else:
-        params["api_key"] = TMDB_API_KEY
+        params["api_key"] = settings.tmdb_api_key
     req = Request(f"https://api.themoviedb.org/3/{path}?{urlencode(params)}", headers=headers)
     with urlopen(req, timeout=8) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -48,7 +48,7 @@ def tmdb_lookup(title, year=None, media_type="movie"):
 
 
 def enrich_tmdb(chat):
-    if not (TMDB_TOKEN or TMDB_API_KEY):
+    if not (settings.tmdb_token or settings.tmdb_api_key):
         return
     with tmdb_lock:
         if tmdb_state.get(chat, {}).get("running") or tmdb_state.get(chat, {}).get("error"):

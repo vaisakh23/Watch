@@ -1,6 +1,6 @@
 from flask import render_template, request
 
-from ..settings import PORT
+from ..settings import settings
 
 
 def human(n):
@@ -14,7 +14,7 @@ def human(n):
 def page(**kw):
     kw.setdefault("err", request.args.get("err"))
     kw.setdefault("chat", "")
-    kw.setdefault("port", PORT)
+    kw.setdefault("port", settings.port)
     template = {
         "login": "login.html",
         "group_error": "group_error.html",

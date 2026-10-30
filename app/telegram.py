@@ -1,15 +1,12 @@
-"""Telegram group sync and media retrieval."""
-
 import asyncio
 import os
-import re
 import time
 
 from telethon import functions
 
 from . import config
 from .config import loop, run, _peer
-from .settings import SYNC_EVERY
+from .settings import settings
 from .database import db, dbx, dblock, save_items
 from .media import VIDEO_EXT, parse, make_key, apply_alias
 
@@ -48,7 +45,7 @@ def maybe_sync(chat):
     r = dbx("SELECT synced_at FROM meta WHERE chat=?", (chat,))
     last = r[0]["synced_at"] if r else 0
     now = time.time()
-    if now - last > SYNC_EVERY and now - st.get("done_at", 0) > SYNC_EVERY:
+    if now - last > settings.sync_every and now - st.get("done_at", 0) > settings.sync_every:
         start_sync(chat)
 
 

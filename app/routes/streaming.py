@@ -11,7 +11,7 @@ from ..config import run
 from ..helpers.auth import authed
 from ..helpers.chat import required_chat
 from ..helpers.streaming import parse_range
-from ..settings import CHUNK, PREFETCH
+from ..settings import settings
 from ..telegram import _get_msg, _next
 
 streaming_blueprint = Blueprint("streaming", __name__)
@@ -44,7 +44,7 @@ def stream(mid, fname):
         return Response(status=416, headers={"Content-Range": f"bytes */{size}"})
     start, end = rng if rng else (0, size - 1)
     length = end - start + 1
-    aligned = start - (start % CHUNK)
+    aligned = start - (start % settings.chunk)
     skip = start - aligned
 
     headers = {
@@ -62,10 +62,10 @@ def stream(mid, fname):
 
     def open_iter(m, offset):
         return m.client.iter_download(
-            m.media, offset=offset, request_size=CHUNK, file_size=size
+            m.media, offset=offset, request_size=settings.chunk, file_size=size
         )
 
-    q = queue.Queue(maxsize=PREFETCH)
+    q = queue.Queue(maxsize=settings.prefetch)
     stop = threading.Event()
     stream_started = time.monotonic()
     bytes_sent = 0

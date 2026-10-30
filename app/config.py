@@ -1,12 +1,10 @@
-"""Telegram client and event-loop lifecycle."""
-
 import asyncio
 import threading
 
 from telethon import TelegramClient, utils
 from telethon.tl import types
 
-from .settings import API_ID, API_HASH, SESSION, TG_GROUP
+from .settings import settings
 
 # ---------------- Telethon runs in its own event-loop thread ----------------
 loop = asyncio.new_event_loop()
@@ -23,12 +21,14 @@ _configured_chat_id = None
 
 async def _init():
     global client
-    client = TelegramClient(SESSION, API_ID, API_HASH)
+    client = TelegramClient(
+        settings.session, settings.telegram_api_id, settings.telegram_api_hash
+    )
     await client.connect()
 
 
 async def _resolve_configured_group():
-    peer = await _peer(TG_GROUP)
+    peer = await _peer(settings.tg_group)
     entity = await client.get_entity(peer)
     if isinstance(entity, types.User) or getattr(entity, "broadcast", False):
         raise ValueError(
@@ -40,7 +40,7 @@ async def _resolve_configured_group():
 def configured_chat():
     """Return the configured group's canonical Telegram ID, resolving it once per process."""
     global _configured_chat_id
-    if not TG_GROUP:
+    if not settings.tg_group:
         raise RuntimeError(
             "TG_GROUP is required. Set it to the group's @username or numeric ID."
         )
