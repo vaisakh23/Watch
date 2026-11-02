@@ -1,3 +1,4 @@
+import logging
 import re
 from urllib.parse import quote
 
@@ -13,6 +14,7 @@ from ..settings import settings
 from ..telegram import maybe_sync, start_sync, sync_state
 
 library_blueprint = Blueprint("library", __name__)
+logger = logging.getLogger(__name__)
 
 
 @library_blueprint.route("/lib")
@@ -22,6 +24,7 @@ def lib():
     try:
         chat = default_chat()
     except Exception as e:  # noqa: BLE001 - login is required before resolving Telegram usernames
+        logger.exception("Could not resolve configured Telegram group")
         return page(
             view="group_error", err=f"Could not resolve TG_GROUP {settings.tg_group!r}: {e}"
         )

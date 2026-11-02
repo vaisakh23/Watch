@@ -1,10 +1,13 @@
 import asyncio
+import logging
 import threading
 
 from telethon import TelegramClient, utils
 from telethon.tl import types
 
 from .settings import settings
+
+logger = logging.getLogger(__name__)
 
 # ---------------- Telethon runs in its own event-loop thread ----------------
 loop = asyncio.new_event_loop()
@@ -25,6 +28,7 @@ async def _init():
         settings.session, settings.telegram_api_id, settings.telegram_api_hash
     )
     await client.connect()
+    logger.info("Connected to Telegram")
 
 
 async def _resolve_configured_group():

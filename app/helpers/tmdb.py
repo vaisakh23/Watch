@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 import threading
 import time
@@ -8,6 +9,8 @@ from urllib.request import Request, urlopen
 
 from ..database import db, dbx, dblock
 from ..settings import settings
+
+logger = logging.getLogger(__name__)
 
 tmdb_state = {}  # chat -> metadata enrichment status
 tmdb_lock = threading.Lock()
@@ -62,9 +65,11 @@ def enrich_tmdb(chat):
                 FROM items i LEFT JOIN tmdb_meta m ON m.chat=i.chat AND m.key=i.key
                 WHERE i.chat=? AND (m.key IS NULL OR m.fetched_at < ?)
                 GROUP BY i.key ORDER BY MAX(i.date) DESC LIMIT 60""", (chat, int(time.time()) - 30 * 86400))
+            logger.info("TMDB enrichment started (chat=%s, titles=%s)", chat, len(pending))
             for item in pending:
+                lookup_started = time.monotonic()
+                media_type = "tv" if item["is_tv"] else "movie"
                 try:
-                    media_type = "tv" if item["is_tv"] else "movie"
                     result = tmdb_lookup(item["title"], item["year"], media_type)
                     with dblock:
                         db.execute("""INSERT OR REPLACE INTO tmdb_meta
@@ -78,9 +83,36 @@ def enrich_tmdb(chat):
                         db.commit()
                 except Exception:  # noqa: BLE001 - metadata must never block library use
                     tmdb_state[chat]["error"] = "TMDB request failed"
+                    logger.exception(
+                        "TMDB lookup or cache failed (title=%r, type=%s, chat=%s)",
+                        item["title"], media_type, chat,
+                    )
                     break
+                if result:
+                    result_title = (
+                        result.get("name") or result.get("original_name")
+                        if media_type == "tv"
+                        else result.get("title") or result.get("original_title")
+                    )
+                    logger.info(
+                        "TMDB match (query=%r, match=%r, type=%s, id=%s, duration=%.2fs)",
+                        item["title"], result_title, media_type, result.get("id"),
+                        time.monotonic() - lookup_started,
+                    )
+                else:
+                    logger.info(
+                        "TMDB no match (query=%r, type=%s, duration=%.2fs)",
+                        item["title"], media_type, time.monotonic() - lookup_started,
+                    )
                 tmdb_state[chat]["done"] += 1
                 time.sleep(.25)
+            logger.info(
+                "TMDB enrichment finished (chat=%s, processed=%s, requested=%s, error=%s)",
+                chat, tmdb_state[chat]["done"], len(pending), bool(tmdb_state[chat]["error"]),
+            )
+        except Exception:  # noqa: BLE001 - metadata must never block library use
+            tmdb_state[chat]["error"] = "TMDB request failed"
+            logger.exception("TMDB enrichment failed (chat=%s)", chat)
         finally:
             tmdb_state[chat]["running"] = False
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 
@@ -9,6 +10,8 @@ from .config import loop, run, _peer
 from .settings import settings
 from .database import db, dbx, dblock, save_items
 from .media import VIDEO_EXT, parse, make_key, apply_alias
+
+logger = logging.getLogger(__name__)
 
 # ----------------------- peers / messages / sync -----------------------
 
@@ -32,6 +35,16 @@ def _aliases(chat):
         a["old_key"]: (a["new_key"], a["new_title"])
         for a in dbx("SELECT * FROM alias WHERE chat=?", (chat,))
     }
+
+
+def _remove_indexed_media(chat, mid, source):
+    existing = dbx("SELECT title FROM items WHERE chat=? AND mid=?", (chat, mid))
+    dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+    if existing:
+        logger.info(
+            "Media removed from library (title=%r, message=%s, source=%s)",
+            existing[0]["title"], mid, source,
+        )
 
 
 def _item_row(chat, m, alias=None):
@@ -86,11 +99,15 @@ def register_message_handlers():
             row = _item_row(chat, m)
             if row:
                 save_items([row])
+                logger.info(
+                    "Media arrived or updated (title=%r, year=%s, message=%s)",
+                    row[6], row[10] or "unknown", row[1],
+                )
             else:
-                dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, m.id))
+                _remove_indexed_media(chat, m.id, "Telegram edit")
             msg_cache.pop((chat, m.id), None)
-        except Exception as e:  # noqa: BLE001
-            print(f"Telegram message event failed: {e}")
+        except Exception:  # noqa: BLE001
+            logger.exception("Telegram message event failed")
 
     async def on_deleted(event):
         if event.chat_id is None:
@@ -100,15 +117,16 @@ def register_message_handlers():
             if event.chat_id != int(chat):
                 return
             for mid in event.deleted_ids:
-                dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                _remove_indexed_media(chat, mid, "Telegram deletion")
                 msg_cache.pop((chat, mid), None)
-        except Exception as e:  # noqa: BLE001
-            print(f"Telegram deletion event failed: {e}")
+        except Exception:  # noqa: BLE001
+            logger.exception("Telegram deletion event failed")
 
     config.client.add_event_handler(on_message, events.NewMessage())
     config.client.add_event_handler(on_message, events.MessageEdited())
     config.client.add_event_handler(on_deleted, events.MessageDeleted())
     _handlers_registered = True
+    logger.info("Telegram media arrival, edit, and deletion handlers registered")
 
 
 sync_state = {}  # chat -> dict(running, scanned, found, error, done_at)
@@ -117,10 +135,12 @@ sync_state = {}  # chat -> dict(running, scanned, found, error, done_at)
 def start_sync(chat, changes=False):
     st = sync_state.setdefault(chat, {})
     if st.get("running"):
+        logger.info("Library sync already running (chat=%s)", chat)
         return
     st.update(
         running=True, scanned=0, found=0, total=0, error=None, phase="starting"
     )
+    logger.info("Library sync queued (chat=%s, checking_changes=%s)", chat, changes)
     asyncio.run_coroutine_threadsafe(_sync(chat, changes), loop)
 
 
@@ -139,6 +159,8 @@ def maybe_sync(chat):
 
 
 async def _sync(chat, changes=False):
+    started = time.monotonic()
+    last_progress_log = 0
     st = sync_state.setdefault(chat, {})
     st.update(
         running=True,
@@ -148,6 +170,18 @@ async def _sync(chat, changes=False):
         error=None,
         phase="checking existing messages" if changes else "scanning new messages",
     )
+    logger.info("Library sync started (chat=%s, mode=%s)", chat, "repair and new media" if changes else "new media")
+
+    def log_progress(force=False):
+        nonlocal last_progress_log
+        scanned = st.get("scanned", 0)
+        if force or scanned - last_progress_log >= 500:
+            logger.info(
+                "Library sync progress (chat=%s, phase=%s, scanned=%s, media=%s)",
+                chat, st.get("phase"), scanned, st.get("found", 0),
+            )
+            last_progress_log = scanned
+
     try:
         peer = await _peer(chat)
         ent = await config.client.get_entity(peer)
@@ -192,12 +226,17 @@ async def _sync(chat, changes=False):
                         if row:
                             save_items([row])
                             st["found"] += 1
+                            logger.info(
+                                "Media processed from sync (title=%r, year=%s, message=%s)",
+                                row[6], row[10] or "unknown", row[1],
+                            )
                         else:
-                            dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                            _remove_indexed_media(chat, mid, "sync repair")
                     else:
-                        dbx("DELETE FROM items WHERE chat=? AND mid=?", (chat, mid))
+                        _remove_indexed_media(chat, mid, "sync repair")
                     msg_cache.pop((chat, mid), None)
                     st["scanned"] += 1
+                    log_progress()
 
         st["phase"] = "scanning new messages"
         newmax, batch = last, []
@@ -213,18 +252,35 @@ async def _sync(chat, changes=False):
             st["found"] += 1
             if len(batch) >= 200:
                 save_items(batch)
+                for item in batch:
+                    logger.info(
+                        "Media processed from sync (title=%r, year=%s, message=%s)",
+                        item[6], item[10] or "unknown", item[1],
+                    )
                 batch = []
+            log_progress()
         save_items(batch)
+        for item in batch:
+            logger.info(
+                "Media processed from sync (title=%r, year=%s, message=%s)",
+                item[6], item[10] or "unknown", item[1],
+            )
         dbx(
             "INSERT OR REPLACE INTO meta VALUES (?,?,?)",
             (chat, newmax, int(time.time())),
         )
     except Exception as e:  # noqa: BLE001
         st["error"] = str(e)
+        logger.exception("Library sync failed (chat=%s, phase=%s)", chat, st.get("phase"))
     finally:
         st["running"] = False
         st["phase"] = "done"
         st["done_at"] = time.time()
+        logger.info(
+            "Library sync finished (chat=%s, scanned=%s, media=%s, duration=%.1fs, error=%s)",
+            chat, st.get("scanned", 0), st.get("found", 0),
+            time.monotonic() - started, bool(st.get("error")),
+        )
 
 
 msg_cache = {}  # (chat, mid) -> message (so seeking doesn't refetch every time)
