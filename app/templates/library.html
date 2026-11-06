@@ -119,7 +119,7 @@ sections[0].groups else none)) %}
 			} catch (_) { }
 		}
 		sync();
-		setInterval(sync, 2500);
+		window.__librarySyncTimer = setInterval(sync, 2500);
 	})();
 </script>
 {% endblock %}

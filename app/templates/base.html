@@ -6,7 +6,17 @@
  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
 </head>
 <body>
- {% if err %}<p class="err">{{ err }}</p>{% endif %}
- {% block content %}{% endblock %}
+ <div id="page-content">
+  {% if err %}<p class="err">{{ err }}</p>{% endif %}
+  {% block content %}{% endblock %}
+ </div>
+ <aside id="persistent-player" class="persistent-player" hidden aria-label="Music player">
+  <img id="player-cover" alt="" hidden>
+  <div class="persistent-track"><b id="player-title">Choose a track</b><small id="player-artist">Music</small></div>
+  <button id="player-prev" type="button" aria-label="Previous track">⏮</button>
+  <audio id="persistent-audio" controls preload="metadata"></audio>
+  <button id="player-next" type="button" aria-label="Next track">⏭</button>
+ </aside>
+ <script src="{{ url_for('static', filename='player.js') }}"></script>
 </body>
 </html>

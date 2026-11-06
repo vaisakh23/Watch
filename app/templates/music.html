@@ -15,7 +15,7 @@
 (() => {
  const el=document.getElementById('music-job'); let was={{ 'true' if job and job.running else 'false' }};
  async function poll(){try{const j=await(await fetch('/music/status')).json();if(j.running){was=true;el.textContent=`${j.phase||'Importing'}${j.current?' · '+j.current:''} · ${j.done||0}/${j.total||'…'} tracks · ${j.failed||0} failed${j.capped?' · limited to first 200':''}`;}else if(was){location.reload();}else if(j.error){el.textContent='Import error: '+j.error;}else if(j.phase==='done'){el.textContent=`Import complete · ${j.done} tracks · ${j.failed} failed${j.capped?' · playlist capped at 200':''}`;}}catch(_){} }
- poll();setInterval(poll,2000);
+ poll();window.__musicStatusTimer=setInterval(poll,2000);
 })();
 </script>
 {% endblock %}
