@@ -20,6 +20,8 @@ def page(**kw):
         "group_error": "group_error.html",
         "lib": "library.html",
         "show": "show.html",
+        "music": "music.html",
+        "music_playlist": "music_playlist.html",
     }.get(kw.pop("view"))
     if template is None:
         raise ValueError("Unknown page view")

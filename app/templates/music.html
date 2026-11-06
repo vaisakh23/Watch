@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Music · Screenroom{% endblock %}
+{% block content %}
+<header class="catalog-head"><a class="brand" href="/lib"><span class="brand-mark">▶</span> SCREEN<span class="brand-light">ROOM</span></a><div class="head-actions"><a class="nav-link" href="/lib">Movies &amp; shows</a></div></header>
+<section class="music-hero"><div class="eyebrow"><span class="live-dot"></span> YOUR MUSIC</div><h1>Music library</h1><p>Import a YouTube Music playlist and save its audio tracks in Telegram’s Music topic.</p></section>
+{% if err %}<p class="err">{{ err }}</p>{% endif %}
+<section class="music-import">
+    <h2>Import a playlist</h2>
+    <form method="post" action="/music/import" class="row"><input name="url" type="url" placeholder="https://music.youtube.com/playlist?list=…" required><button class="st">Import</button></form>
+    <div id="music-job" class="small" aria-live="polite">{% if job and job.running %}{{ job.phase }}{% elif job and job.error %}Import error: {{ job.error }}{% endif %}</div>
+</section>
+<div class="library-toolbar"><div><div class="eyebrow">COLLECTION</div><h2>Playlists</h2></div></div>
+{% if playlists %}<div class="playlist-list">{% for playlist in playlists %}<a class="playlist-row" href="/music/playlist/{{ playlist.playlist_id }}">{% if playlist.thumbnail_url %}<img class="playlist-cover" src="{{ playlist.thumbnail_url }}" alt="" loading="lazy">{% else %}<span class="playlist-icon">♫</span>{% endif %}<span><b>{{ playlist.title }}</b><small>{{ playlist.tracks|length }} tracks · imported {{ playlist.imported_at|int|date }}</small></span><span class="playlist-arrow">›</span></a>{% endfor %}</div>{% else %}<p class="small">No playlists imported yet.</p>{% endif %}
+<script>
+(() => {
+ const el=document.getElementById('music-job'); let was={{ 'true' if job and job.running else 'false' }};
+ async function poll(){try{const j=await(await fetch('/music/status')).json();if(j.running){was=true;el.textContent=`${j.phase||'Importing'}${j.current?' · '+j.current:''} · ${j.done||0}/${j.total||'…'} tracks · ${j.failed||0} failed${j.capped?' · limited to first 200':''}`;}else if(was){location.reload();}else if(j.error){el.textContent='Import error: '+j.error;}else if(j.phase==='done'){el.textContent=`Import complete · ${j.done} tracks · ${j.failed} failed${j.capped?' · playlist capped at 200':''}`;}}catch(_){} }
+ poll();setInterval(poll,2000);
+})();
+</script>
+{% endblock %}

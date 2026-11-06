@@ -52,6 +52,10 @@ def _item_row(chat, m, alias=None):
     f = m.file
     if not f or not is_media(f):
         return None
+    topic = topic_of(m)
+    topic_rows = dbx("SELECT title FROM topics WHERE chat=? AND topic_id=?", (chat, topic))
+    if topic_rows and topic_rows[0]["title"].strip().casefold() == "music":
+        return None
     name = f.name or (m.text or "").split("\n")[0].strip() or f"file_{m.id}"
     if not os.path.splitext(name)[1]:
         name += f.ext or ""
@@ -61,7 +65,7 @@ def _item_row(chat, m, alias=None):
     return (
         chat,
         m.id,
-        topic_of(m),
+        topic,
         name,
         f.size or 0,
         int(m.date.timestamp()),
@@ -195,6 +199,14 @@ async def _sync(chat, changes=False):
             rows = [(chat, t.id, t.title) for t in res.topics if hasattr(t, "title")]
             with dblock:
                 db.executemany("INSERT OR REPLACE INTO topics VALUES (?,?,?)", rows)
+                music_topic_ids = [t.id for t in res.topics
+                                   if (getattr(t, "title", "") or "").strip().casefold() == "music"]
+                if music_topic_ids:
+                    placeholders = ",".join("?" for _ in music_topic_ids)
+                    db.execute(
+                        f"DELETE FROM items WHERE chat=? AND topic IN ({placeholders})",
+                        (chat, *music_topic_ids),
+                    )
                 db.commit()
         except Exception:  # noqa: BLE001  (not a forum group)
             pass

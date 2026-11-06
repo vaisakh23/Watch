@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ playlist.title }} · Music{% endblock %}
+{% block content %}
+<header class="catalog-head"><a class="brand" href="/music">← Music library</a><a class="nav-link" href="/lib">Movies &amp; shows</a></header>
+<div class="eyebrow">YOUTUBE MUSIC PLAYLIST</div><h1 class="music-title">{{ playlist.title }}</h1><p class="small">{{ playlist.tracks|length }} tracks · audio stored in the Telegram Music topic</p>
+<section class="music-player"><button id="prev" aria-label="Previous track">◀</button><button id="next" aria-label="Next track">▶|</button><div class="player-info"><b id="now-title">Choose a track</b><small id="now-artist">{{ playlist.title }}</small><audio id="audio" controls preload="metadata"></audio></div></section>
+<div class="track-list" id="track-list">
+{% for track in playlist.tracks %}<article class="track-row" data-src="{{ track.stream_url or '' }}" data-title="{{ track.title }}" data-artist="{{ track.artists }}" data-status="{{ track.status }}">
+<span class="track-no">{{ '%02d'|format(loop.index) }}</span>{% if track.thumbnail_url %}<img class="track-cover" src="{{ track.thumbnail_url }}" alt="" loading="lazy">{% else %}<span class="track-cover track-cover-empty">♫</span>{% endif %}<button class="track-play" {% if not track.stream_url %}disabled{% endif %} aria-label="Play {{ track.title }}">▶</button><span class="track-copy"><b>{{ track.title }}</b><small>{{ track.artists }}{% if track.album %} · {{ track.album }}{% endif %}</small></span><span class="track-state">{% if track.status == 'failed' %}Unavailable{% elif track.status != 'ready' %}Processing{% else %}{{ (track.duration_ms // 60000) }}:{{ '%02d'|format((track.duration_ms // 1000) % 60) }}{% endif %}</span>
+</article>{% endfor %}
+</div>
+<script>
+(() => {
+ const rows=[...document.querySelectorAll('.track-row[data-src]')].filter(x=>x.dataset.src),audio=document.getElementById('audio');let at=-1;
+ function play(i){if(!rows.length)return;at=(i+rows.length)%rows.length;const row=rows[at];audio.src=row.dataset.src;document.getElementById('now-title').textContent=row.dataset.title;document.getElementById('now-artist').textContent=row.dataset.artist;audio.play();rows.forEach((r,n)=>r.classList.toggle('playing',n===at));}
+ rows.forEach((row,i)=>row.querySelector('.track-play').addEventListener('click',()=>play(i)));
+ audio.addEventListener('ended',()=>play(at+1));document.getElementById('prev').addEventListener('click',()=>play(at-1));document.getElementById('next').addEventListener('click',()=>play(at+1));
+})();
+</script>
+{% endblock %}

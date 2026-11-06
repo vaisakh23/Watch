@@ -8,6 +8,7 @@ dependencies = [
     "flask>=3.1,<4",
     "python-dotenv>=1.0,<2",
     "telethon==1.45.0",
+    "yt-dlp[default]>=2025.1.15",
 ]
 
 [project.scripts]
